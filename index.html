@@ -118,28 +118,39 @@
   const plural = (n, f) => (n % 10 === 1 && n % 100 !== 11) ? f[0] : ([2,3,4].includes(n % 10) && ![12,13,14].includes(n % 100)) ? f[1] : f[2];
   const daysLeft = n => n === 0 ? "сегодня" : n === 1 ? "завтра" : n < 0 ? "прошла" : `через ${n} ${plural(n, ["день","дня","дней"])}`;
 
-  // ---------- Данные из ссылки: #j.<base64url JSON> или #z.<base64url deflate JSON> ----------
-  async function decode() {
-    const h = location.hash.slice(1);
-    if (!h) return null;
-    const kind = h.slice(0, 2), b64 = h.slice(2).replace(/-/g, "+").replace(/_/g, "/");
+  // ---------- Данные из ссылки: ?d=j.<base64url JSON> или ?d=z.<base64url deflate JSON> ----------
+  // Telegram добавляет в ссылку свои параметры (tgWebAppData и т.п.), поэтому ищем именно наш «d=».
+  function findPayload() {
+    const parts = (location.search.slice(1) + "&" + location.hash.slice(1)).split(/[&#?]/);
+    for (const part of parts) {
+      if (part.startsWith("d=")) return decodeURIComponent(part.slice(2));
+      if (/^[jz]\./.test(part)) return part;  // старый формат ссылки (#j.…)
+    }
+    return null;
+  }
+
+  async function decode(payload) {
+    const kind = payload.slice(0, 2), b64 = payload.slice(2).replace(/-/g, "+").replace(/_/g, "/");
     const bytes = Uint8Array.from(atob(b64 + "===".slice((b64.length + 3) % 4)), c => c.charCodeAt(0));
     let raw = bytes;
     if (kind === "z.") {
+      if (typeof DecompressionStream === "undefined") throw new Error("обнови Telegram — эта версия не умеет распаковывать данные");
       const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
       raw = new Uint8Array(await new Response(stream).arrayBuffer());
     }
     return JSON.parse(new TextDecoder().decode(raw));
   }
 
-  let data;
-  try { data = await decode(); } catch (e) { data = null; }
-  if (!data) {
-    for (const id of ["calendar", "list", "spend"])
-      document.getElementById(id).innerHTML = '<div class="empty">Открой приложение кнопкой в боте — так в нём появятся твои подписки.</div>';
+  function showMessage(text) {
+    for (const id of ["calendar", "list", "spend"]) document.getElementById(id).innerHTML = `<div class="empty">${text}</div>`;
     document.getElementById("calendar").classList.add("active");
-    return;
   }
+
+  const payload = findPayload();
+  if (!payload) { showMessage("Открой приложение кнопкой «📱 Приложение» в боте — так в нём появятся твои подписки."); return; }
+  let data;
+  try { data = await decode(payload); }
+  catch (e) { showMessage("Не получилось прочитать данные: " + esc(e.message || e) + ".<br>Нажми «📱 Приложение» в боте ещё раз."); return; }
 
   const today = pd(data.d);
   // s: [название, категория, цена, валюта, месяцев, дата, конец пробного|0, на паузе с|0]
@@ -273,3 +284,4 @@
 </script>
 </body>
 </html>
+
